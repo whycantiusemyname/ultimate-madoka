@@ -14,4 +14,6 @@
 
 卡面和作品图录使用 Blender 渲染，交互视图使用浏览器实时照明。网页通过 GitHub Pages 部署，本地预览可在仓库根目录运行 `python -m http.server 8000`。
 
+展页的暖色逆光取自电视动画主视觉，拱形画框和靛紫展厅呼应圆神的白裙与星空裙衬。玫瑰窗刻线和宝石花饰为本页绘制。[电视动画主视觉](https://www.madoka-magica.com/tv/) · [《魔法纪录》周年影像](https://www.youtube.com/watch?v=g-174LSsrn8) · [Good Smile 圆神手办摄影](https://www.goodsmile.com/en/product/1408/Ultimate%2BMadoka)
+
 角色出自《魔法少女小圆》，造型参考《魔法纪录》四星 Ultimate Madoka 卡面。本展为非官方同人创作。网页查看器使用 Google 的 model-viewer，解码器使用 meshoptimizer，许可随组件保存在 `vendor/`。

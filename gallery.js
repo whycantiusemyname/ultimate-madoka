@@ -30,7 +30,7 @@ let importAttempts = 0;
 let lastAnnouncedProgress = -1;
 
 function sizeLabel(bytes) {
-  return Number.isFinite(bytes) && bytes > 0 ? `约 ${Math.ceil(bytes / 1_000_000)} MB` : '';
+  return Number.isFinite(bytes) && bytes > 0 ? `${(bytes / 1_000_000).toFixed(2)} MB` : '';
 }
 
 const metadata = fetch(new URL('models.json', assetBase))

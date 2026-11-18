@@ -1,0 +1,12 @@
+{
+  "web": {
+    "file": "madoka.glb",
+    "bytes": 43249012,
+    "triangles": 2865173
+  },
+  "full": {
+    "file": "madoka-full.glb",
+    "bytes": 46050396,
+    "triangles": 3115201
+  }
+}

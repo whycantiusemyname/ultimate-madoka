@@ -5,15 +5,19 @@ const loadButton = document.querySelector('#load-model');
 const progress = document.querySelector('#model-progress');
 const actions = document.querySelector('#viewer-actions');
 const status = document.querySelector('#viewer-status');
+const cameraActions = document.querySelector('#camera-actions');
+const baseActions = document.querySelector('#base-controls');
+const pedestalButton = document.querySelector('#toggle-pedestal');
+const controlsHint = document.querySelector('#viewer-controls-hint');
 const editionButtons = [...document.querySelectorAll('[data-edition]')];
-const cameraButtons = [...actions.querySelectorAll('.viewer-controls button')];
+const cameraButtons = [...cameraActions.querySelectorAll('button')];
 
 const editions = {
-  web: { label: '网页版', file: 'madoka.glb' },
-  full: { label: '完整版', file: 'madoka-full.glb' },
+  web: { label: '高精压缩版', file: 'madoka.glb' },
+  full: { label: '无损完整版', file: 'madoka-full.glb' },
 };
 const assetBase = new URL('./assets/', import.meta.url);
-const defaultView = { orbit: '0deg 83deg 94%', target: 'auto auto auto', fov: 'auto' };
+const defaultView = { orbit: '0deg 83deg 105%', target: 'auto 2.35m auto', fov: 'auto' };
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const cameraLabels = {
   front: '正面视角', back: '背面视角', left: '左侧视角', right: '右侧视角',
@@ -25,12 +29,21 @@ const cameraLabels = {
 let viewer;
 let edition = 'web';
 let savedView = defaultView;
+let resetFrame = defaultView;
 let component;
 let importAttempts = 0;
 let lastAnnouncedProgress = -1;
+let pedestalMaterials;
+let pedestalVisible = false;
+let pedestalLoading = false;
 
 function sizeLabel(bytes) {
   return Number.isFinite(bytes) && bytes > 0 ? `${(bytes / 1_000_000).toFixed(2)} MB` : '';
+}
+
+function describeEdition() {
+  const item = editions[edition];
+  description.textContent = `已选${item.label}${item.size ? `（${item.size}）` : ''}。加载后即可旋转与放大。`;
 }
 
 const metadata = fetch(new URL('models.json', assetBase))
@@ -46,9 +59,7 @@ const metadata = fetch(new URL('models.json', assetBase))
       size.textContent = item.size;
       if (item.size) size.parentElement.setAttribute('aria-label', `${item.label}，${item.size}`);
     }
-    if (stage.dataset.state === 'idle' && editions.web.size) {
-      description.textContent = `加载网页版模型（${editions.web.size}），即可旋转与放大。`;
-    }
+    if (stage.dataset.state === 'idle') describeEdition();
   })
   .catch(() => {});
 
@@ -62,7 +73,7 @@ async function getComponent() {
   component = customElements.get('model-viewer');
   if (!component) throw new Error('model-viewer did not register');
   component.meshoptDecoderLocation = decoder;
-  component.modelCacheSize = 1;
+  component.modelCacheSize = 2;
   return component;
 }
 
@@ -70,16 +81,22 @@ function setState(state) {
   stage.dataset.state = state;
   const loading = state === 'loading';
   const ready = state === 'ready';
+  const busy = loading || pedestalLoading;
   guide.hidden = ready;
   progress.hidden = !loading;
-  actions.hidden = state === 'idle';
-  for (const button of cameraButtons) button.disabled = !ready;
+  cameraActions.hidden = !ready;
+  baseActions.hidden = !ready;
+  controlsHint.textContent = ready ? '拖动或用方向键旋转 · 滚轮、捏合或用 ＋ / − 缩放' : '在此选择要加载的模型版本。';
+  for (const button of cameraButtons) button.disabled = !ready || busy;
   for (const button of editionButtons) {
     button.setAttribute('aria-pressed', String(button.dataset.edition === edition));
-    button.setAttribute('aria-disabled', String(loading));
+    button.setAttribute('aria-disabled', String(busy));
   }
   loadButton.setAttribute('aria-disabled', String(loading));
-  loadButton.firstChild.textContent = loading ? '正在载入…' : '重试加载';
+  loadButton.firstChild.textContent = { idle: '加载三维模型', loading: '正在载入…', error: '重试加载' }[state] ?? '加载三维模型';
+  pedestalButton.setAttribute('aria-pressed', String(pedestalVisible));
+  pedestalButton.setAttribute('aria-disabled', String(pedestalLoading));
+  pedestalButton.textContent = pedestalLoading ? '加载底座…' : '魔法阵底座';
 }
 
 function readCamera(model) {
@@ -95,6 +112,62 @@ function setCamera(model, view, jump = false) {
   model.cameraTarget = view.target;
   model.fieldOfView = view.fov;
   if (jump) model.jumpCameraToGoal();
+}
+
+function waitForScene(model) {
+  return new Promise((resolve, reject) => {
+    const events = new AbortController();
+    model.addEventListener('load', () => { events.abort(); resolve(); }, { signal: events.signal });
+    model.addEventListener('error', (event) => { events.abort(); reject(event); }, { signal: events.signal });
+  });
+}
+
+function setPedestalVisibility(visible) {
+  for (const { material, mode, color } of pedestalMaterials) {
+    material.setAlphaMode(visible ? mode : 'MASK');
+    material.pbrMetallicRoughness.setBaseColorFactor(visible ? color : [...color.slice(0, 3), 0]);
+  }
+  pedestalVisible = visible;
+  setState('ready');
+  status.textContent = visible ? '已显示魔法阵底座。' : '已隐藏魔法阵底座。';
+}
+
+async function showPedestal(model) {
+  const previousCamera = readCamera(model);
+  const extra = document.createElement('extra-model');
+  extra.src = new URL('pedestal.glb', assetBase).href;
+  pedestalLoading = true;
+  model.inert = true;
+  setState('ready');
+  status.textContent = '正在加载魔法阵底座。';
+  try {
+    const changed = waitForScene(model);
+    model.append(extra);
+    await changed;
+    pedestalMaterials = extra.model.materials.map((material) => ({
+      material,
+      mode: material.getAlphaMode(),
+      color: [...material.pbrMetallicRoughness.baseColorFactor],
+    }));
+    setCamera(model, previousCamera, true);
+    setPedestalVisibility(true);
+  } catch {
+    const restored = waitForScene(model);
+    extra.remove();
+    try {
+      await restored;
+      setCamera(model, previousCamera, true);
+      status.textContent = '底座加载失败。可以重试。';
+    } catch {
+      savedView = previousCamera;
+      loadError();
+    }
+    pedestalVisible = false;
+  } finally {
+    model.inert = false;
+    pedestalLoading = false;
+    setState(stage.dataset.state);
+  }
 }
 
 function loadError() {
@@ -121,8 +194,11 @@ function updateProgress(event) {
 
 async function loadEdition(id) {
   const state = stage.dataset.state;
-  if (state === 'loading' || (state === 'ready' && id === edition)) return;
+  if (pedestalLoading || state === 'loading' || (state === 'ready' && id === edition)) return;
   if (state === 'ready') savedView = readCamera(viewer);
+  const restorePedestal = pedestalVisible;
+  pedestalVisible = false;
+  pedestalMaterials = undefined;
   viewer?.remove();
   viewer = undefined;
   edition = id;
@@ -150,6 +226,7 @@ async function loadEdition(id) {
     model.addEventListener('progress', updateProgress);
     model.addEventListener('error', loadError, { once: true });
     model.addEventListener('load', () => {
+      model.removeEventListener('error', loadError);
       const moveFocus = document.activeElement === loadButton;
       setCamera(model, savedView, true);
       setState('ready');
@@ -160,6 +237,14 @@ async function loadEdition(id) {
       }
       model.dismissPoster();
       status.textContent = `${item.label}已加载。可以旋转、缩放或切换模型版本。`;
+      if (resetFrame === defaultView) {
+        resetFrame = readCamera(model);
+      }
+      if (restorePedestal) {
+        model.updateComplete.then(() => requestAnimationFrame(() => {
+          if (viewer === model && !pedestalLoading && !pedestalMaterials) showPedestal(model);
+        }));
+      }
     }, { once: true });
     model.addEventListener('keydown', (event) => {
       if (event.ctrlKey || event.metaKey || event.altKey) return;
@@ -178,15 +263,32 @@ async function loadEdition(id) {
 
 loadButton.addEventListener('click', () => loadEdition(edition));
 for (const button of editionButtons) {
-  button.addEventListener('click', () => loadEdition(button.dataset.edition));
+  button.addEventListener('click', () => {
+    const id = button.dataset.edition;
+    if (stage.dataset.state === 'idle') {
+      edition = id;
+      setState('idle');
+      describeEdition();
+    } else {
+      loadEdition(id);
+    }
+  });
 }
+pedestalButton.addEventListener('click', () => {
+  if (stage.dataset.state !== 'ready' || pedestalLoading) return;
+  if (pedestalMaterials) setPedestalVisibility(!pedestalVisible);
+  else showPedestal(viewer);
+});
 document.querySelector('#zoom-out').addEventListener('click', () => viewer?.zoom(-1));
 document.querySelector('#zoom-in').addEventListener('click', () => viewer?.zoom(1));
 document.querySelector('#reset-view').addEventListener('click', () => {
   if (!viewer) return;
-  savedView = defaultView;
-  setCamera(viewer, defaultView, reduceMotion.matches);
+  savedView = resetFrame;
+  setCamera(viewer, resetFrame, reduceMotion.matches);
   status.textContent = '已重置视角。';
 });
 
 loadButton.hidden = false;
+actions.hidden = false;
+setState('idle');
+describeEdition();
